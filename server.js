@@ -85,7 +85,8 @@ io.on('connection', (socket) => {
     reply(ack, { ok: true, pin: r.pin });
     socket.emit('chatLog', r.chat);
     sendMe();
-    emitEvents(r, j.events);
+    // Người vừa vào đã nhận các dòng này trong chatLog, nên chỉ phát cho những người còn lại.
+    for (const e of j.events) if (e.chat) socket.to(r.pin).emit('chat', e.chat);
     pushState(r);
   }
 

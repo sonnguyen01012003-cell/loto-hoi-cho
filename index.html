@@ -321,6 +321,7 @@ main{display:grid;gap:16px;grid-template-columns:minmax(0,1fr);grid-template-are
 
   var S=null, ME=null, CHAT=[], inRoom=false, viVoice=null, toastTimer=null, armed={}, speaking={};
   var CFG={agoraAppId:''};
+  var canSpeak=('speechSynthesis' in window)&&typeof SpeechSynthesisUtterance!=='undefined';
 
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
   function has(a,n){return a.indexOf(n)!==-1}
@@ -342,14 +343,15 @@ main{display:grid;gap:16px;grid-template-columns:minmax(0,1fr);grid-template-are
     t.hidden=true;void t.offsetWidth;t.hidden=false;
     clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.hidden=true},6000);
   }
-  function speak(text){
-    if(!L.readNum||!viVoice)return;
-    try{speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(text);u.lang='vi-VN';u.voice=viVoice;u.rate=.95;speechSynthesis.speak(u)}catch(e){}
+  // Số cái hô được ưu tiên: đọc ngay và cắt ngang câu đang đọc. Tiếng Đợi, Kinh xếp hàng đọc sau số.
+  function speak(text,now){
+    if(!L.readNum||!canSpeak)return;
+    try{if(now)speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(text);u.lang='vi-VN';if(viVoice)u.voice=viVoice;u.rate=.95;speechSynthesis.speak(u)}catch(e){}
   }
   function findVoice(){
     try{viVoice=speechSynthesis.getVoices().filter(function(x){return /^vi/i.test(x.lang)})[0]||null}catch(e){viVoice=null}
-    $('readNum').disabled=!viVoice;$('readNum').checked=!!viVoice&&L.readNum;
-    $('readT').textContent=viVoice?'Đọc số thành tiếng':'Máy này chưa có giọng đọc tiếng Việt';
+    $('readNum').disabled=!canSpeak;$('readNum').checked=canSpeak&&L.readNum;
+    $('readT').textContent=!canSpeak?'Trình duyệt này không đọc thành tiếng được':viVoice?'Đọc số thành tiếng':'Đọc số thành tiếng (máy chưa có giọng Việt, có thể đọc lơ lớ)';
   }
   function confetti(){
     if(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)return;
@@ -595,7 +597,7 @@ main{display:grid;gap:16px;grid-template-columns:minmax(0,1fr);grid-template-are
   socket.on('event',function(e){
     if(e.type==='number'){
       if(S&&!has(S.called,e.n))S.called.push(e.n);
-      syncMarks();paintCall(true);paintTicket();speak('Số '+words(e.n));
+      syncMarks();paintCall(true);paintTicket();speak('Số '+words(e.n),true);
     }else if(e.type==='doi'){
       toast('doi',e.name+' hô ĐỢI!','Còn một số nữa là kinh.');speak(e.name+' đợi');
     }else if(e.type==='kinh'){
@@ -637,7 +639,7 @@ main{display:grid;gap:16px;grid-template-columns:minmax(0,1fr);grid-template-are
   };
   $('quit').onclick=function(){twoStep('quit',this,'Nhường quyền cái? Bấm lần nữa','Thôi làm cái',function(){act('quitHost')})};
   $('claim').onclick=function(){act('claimHost')};
-  $('readNum').onchange=function(){L.readNum=this.checked;save();if(!L.readNum){try{speechSynthesis.cancel()}catch(e){}}};
+  $('readNum').onchange=function(){L.readNum=this.checked;save();if(!L.readNum){try{speechSynthesis.cancel()}catch(e){}}else speak('Đã bật đọc số',true)};
   $('automark').onchange=function(){L.autoMark=this.checked;syncMarks();paintTicket()};
   $('doi').onclick=function(){act('doi')};
   $('kinh').onclick=function(){act('kinh')};
@@ -667,6 +669,15 @@ main{display:grid;gap:16px;grid-template-columns:minmax(0,1fr);grid-template-are
   $('vLeave').onclick=function(){leaveVoice(false)};
   $('vMute').onclick=toggleMute;
   window.addEventListener('beforeunload',function(){leaveVoice(true)});
+
+  // Trình duyệt chỉ cho đọc thành tiếng sau khi người dùng chạm vào trang: mở khoá ở lần chạm đầu tiên,
+  // để máy của người không làm cái cũng đọc được số khi cái hô.
+  function unlockSpeech(){
+    if(!canSpeak)return;
+    try{var u=new SpeechSynthesisUtterance(' ');u.volume=0;u.lang='vi-VN';speechSynthesis.speak(u)}catch(e){}
+  }
+  document.addEventListener('click',unlockSpeech,{once:true,capture:true});
+  document.addEventListener('keydown',unlockSpeech,{once:true,capture:true});
 
   buildBoard();buildPick();findVoice();
   try{speechSynthesis.onvoiceschanged=findVoice}catch(e){}
