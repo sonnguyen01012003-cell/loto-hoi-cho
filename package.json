@@ -1,0 +1,15 @@
+{
+  "name": "loto-hoi-cho",
+  "version": "1.0.0",
+  "description": "Lô tô nhiều người chơi theo phòng mã PIN, có chat và kênh thoại Agora",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "license": "MIT"
+}
