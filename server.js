@@ -26,6 +26,47 @@ const timers = new Map(); // pin -> interval tự hô
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/config', (req, res) => res.json({ agoraAppId: AGORA_APP_ID }));
 
+// Giọng đọc chung cho cả phòng: máy chủ lấy tiếng đọc tiếng Việt của Google Dịch (đường không chính thức)
+// cho đúng 92 câu cố định rồi giữ lại trong bộ nhớ. Không gửi tên người chơi hay chữ tuỳ ý ra ngoài.
+const DIGITS = ['', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
+function numberWords(n) {
+  if (n < 10) return DIGITS[n];
+  const t = Math.floor(n / 10), u = n % 10, s = t === 1 ? 'mười' : DIGITS[t] + ' mươi';
+  if (u === 0) return s;
+  if (u === 1 && t > 1) return s + ' mốt';
+  if (u === 5) return s + ' lăm';
+  return s + ' ' + DIGITS[u];
+}
+function ttsText(key) {
+  if (key === 'doi') return 'Có người đợi';
+  if (key === 'kinh') return 'Kinh rồi! Có người thắng';
+  if (!/^[1-9][0-9]?$/.test(key)) return null;
+  const n = +key;
+  return n >= 1 && n <= 90 ? 'Số ' + numberWords(n) : null;
+}
+const ttsCache = new Map(); // key -> Promise<Buffer>
+async function fetchTts(text) {
+  const url = 'https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + encodeURIComponent(text);
+  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error('tts ' + r.status);
+  if (!/audio/.test(r.headers.get('content-type') || '')) throw new Error('tts type');
+  return Buffer.from(await r.arrayBuffer());
+}
+app.get('/tts/:key', async (req, res) => {
+  const key = String(req.params.key), text = ttsText(key);
+  if (!text) return res.status(404).end();
+  try {
+    let p = ttsCache.get(key);
+    if (!p) { p = fetchTts(text); ttsCache.set(key, p); p.catch(() => ttsCache.delete(key)); }
+    const buf = await p;
+    res.set({ 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=604800' });
+    res.send(buf);
+  } catch (e) {
+    console.warn('Không lấy được giọng đọc chung:', e.message);
+    res.status(502).end();
+  }
+});
+
 function stopAuto(room) {
   const t = timers.get(room.pin);
   if (t) { clearInterval(t); timers.delete(room.pin); }
