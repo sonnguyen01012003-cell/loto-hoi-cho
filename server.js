@@ -7,8 +7,20 @@ const { Server } = require('socket.io');
 const { RoomStore } = require('./game');
 
 const PORT = process.env.PORT || 3000;
-const AGORA_APP_ID = process.env.AGORA_APP_ID || '';
-const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || '';
+// Bỏ dấu cách và dấu ngoặc kép thừa hay dính vào khi dán.
+const clean = (s) => String(s || '').trim().replace(/^["']+|["']+$/g, '').trim();
+const AGORA_APP_ID = clean(process.env.AGORA_APP_ID);
+// Certificate lấy từ biến môi trường; nếu không có thì đọc tệp agora-certificate.txt cạnh server.js
+// (tệp này nằm trong .gitignore, chỉ để trên máy chạy máy chủ).
+function readCertFile() {
+  try { return require('fs').readFileSync(path.join(__dirname, 'agora-certificate.txt'), 'utf8'); } catch (e) { return ''; }
+}
+const AGORA_APP_CERTIFICATE = clean(process.env.AGORA_APP_CERTIFICATE) || clean(readCertFile().replace(/^\uFEFF/, ''));
+const HEX32 = /^[0-9a-f]{32}$/i;
+// Chỉ in độ dài, không in giá trị, để Certificate không lộ ra màn hình.
+if (AGORA_APP_ID && !HEX32.test(AGORA_APP_ID)) console.warn('CẢNH BÁO: AGORA_APP_ID không đúng dạng 32 ký tự 0-9 a-f (đang có ' + AGORA_APP_ID.length + ' ký tự).');
+if (AGORA_APP_CERTIFICATE && !HEX32.test(AGORA_APP_CERTIFICATE)) console.warn('CẢNH BÁO: AGORA_APP_CERTIFICATE không đúng dạng 32 ký tự 0-9 a-f (đang có ' + AGORA_APP_CERTIFICATE.length + ' ký tự). Kênh thoại sẽ không vào được. Chép lại Primary Certificate trên Agora Console.');
+if (AGORA_APP_CERTIFICATE && HEX32.test(AGORA_APP_CERTIFICATE)) console.log('Certificate Agora: đã nhận, đúng dạng.');
 
 // Tuỳ chọn: nếu dự án Agora bật App Certificate thì cần gói "agora-token" để cấp token.
 let tokenLib = null;
@@ -23,49 +35,8 @@ const io = new Server(server, { maxHttpBufferSize: 20000 });
 const store = new RoomStore();
 const timers = new Map(); // pin -> interval tự hô
 
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.use(express.static(path.join(__dirname, 'public')));
 app.get('/config', (req, res) => res.json({ agoraAppId: AGORA_APP_ID }));
-
-// Giọng đọc chung cho cả phòng: máy chủ lấy tiếng đọc tiếng Việt của Google Dịch (đường không chính thức)
-// cho đúng 92 câu cố định rồi giữ lại trong bộ nhớ. Không gửi tên người chơi hay chữ tuỳ ý ra ngoài.
-const DIGITS = ['', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
-function numberWords(n) {
-  if (n < 10) return DIGITS[n];
-  const t = Math.floor(n / 10), u = n % 10, s = t === 1 ? 'mười' : DIGITS[t] + ' mươi';
-  if (u === 0) return s;
-  if (u === 1 && t > 1) return s + ' mốt';
-  if (u === 5) return s + ' lăm';
-  return s + ' ' + DIGITS[u];
-}
-function ttsText(key) {
-  if (key === 'doi') return 'Có người đợi';
-  if (key === 'kinh') return 'Kinh rồi! Có người thắng';
-  if (!/^[1-9][0-9]?$/.test(key)) return null;
-  const n = +key;
-  return n >= 1 && n <= 90 ? 'Số ' + numberWords(n) : null;
-}
-const ttsCache = new Map(); // key -> Promise<Buffer>
-async function fetchTts(text) {
-  const url = 'https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + encodeURIComponent(text);
-  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
-  if (!r.ok) throw new Error('tts ' + r.status);
-  if (!/audio/.test(r.headers.get('content-type') || '')) throw new Error('tts type');
-  return Buffer.from(await r.arrayBuffer());
-}
-app.get('/tts/:key', async (req, res) => {
-  const key = String(req.params.key), text = ttsText(key);
-  if (!text) return res.status(404).end();
-  try {
-    let p = ttsCache.get(key);
-    if (!p) { p = fetchTts(text); ttsCache.set(key, p); p.catch(() => ttsCache.delete(key)); }
-    const buf = await p;
-    res.set({ 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=604800' });
-    res.send(buf);
-  } catch (e) {
-    console.warn('Không lấy được giọng đọc chung:', e.message);
-    res.status(502).end();
-  }
-});
 
 function stopAuto(room) {
   const t = timers.get(room.pin);
@@ -126,8 +97,11 @@ io.on('connection', (socket) => {
     reply(ack, { ok: true, pin: r.pin });
     socket.emit('chatLog', r.chat);
     sendMe();
-    // Người vừa vào đã nhận các dòng này trong chatLog, nên chỉ phát cho những người còn lại.
-    for (const e of j.events) if (e.chat) socket.to(r.pin).emit('chat', e.chat);
+    // chatLog vừa gửi đã có tin "vào phòng", nên chỉ báo tin đó cho những người khác.
+    for (const e of j.events || []) {
+      if (e.chat) socket.to(r.pin).emit('chat', e.chat);
+      if (e.event) io.to(r.pin).emit('event', e.event);
+    }
     pushState(r);
   }
 
@@ -163,6 +137,7 @@ io.on('connection', (socket) => {
   socket.on('doi', (d, ack) => act(ack, () => room.doi(me)));
   socket.on('kinh', (d, ack) => act(ack, () => room.kinh(me)));
   socket.on('chat', (d, ack) => act(ack, () => room.chatFrom(me, d)));
+  socket.on('ho', (d, ack) => act(ack, () => room.ho(me)));
   socket.on('rename', (d, ack) => act(ack, () => {
     const j = room.join(me.token, d);
     return j.error ? { error: j.error } : { events: j.events };
@@ -179,6 +154,8 @@ io.on('connection', (socket) => {
     try {
       const { RtcTokenBuilder, RtcRole } = tokenLib;
       const token = RtcTokenBuilder.buildTokenWithUid(AGORA_APP_ID, AGORA_APP_CERTIFICATE, channel, me.uid, RtcRole.PUBLISHER, 3600, 3600);
+      // agora-token trả về chuỗi rỗng khi App ID hoặc Certificate sai dạng.
+      if (!token) return reply(ack, { error: 'Máy chủ không tạo được token thoại: App ID hoặc Certificate sai dạng (phải là 32 ký tự 0-9 a-f). Chủ phòng chép lại Certificate rồi bật lại máy chủ.' });
       reply(ack, { appId: AGORA_APP_ID, channel, uid: me.uid, token });
     } catch (e) { reply(ack, { error: 'Không cấp được token thoại: ' + e.message }); }
   });

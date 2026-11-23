@@ -8,6 +8,7 @@ const COLORS = ['pink', 'rose', 'red', 'maroon', 'orange', 'peach', 'yellow', 'l
 const HOST_GRACE_MS = 30 * 1000;      // cái mất kết nối quá lâu thì người khác được xin làm cái
 const DOI_COOLDOWN_MS = 15 * 1000;
 const CHAT_COOLDOWN_MS = 700;
+const HO_AT = 3;                      // đủ 3 số đã hô trên một hàng thì được hò
 const CHAT_KEEP = 100;
 
 const rnd = (n) => crypto.randomInt(n);
@@ -58,6 +59,7 @@ class Player {
     this.waited = new Set(); this.kinhRows = new Set();
     this.doi = false; this.kinh = false;
     this.lastDoi = 0; this.lastChat = 0;
+    this.hoRows = new Set();                  // hàng đã hò trong ván này
     this.voice = { in: false, muted: false };
   }
   pairOf(c) { if (!this.pairs[c]) this.pairs[c] = makePair(); return this.pairs[c]; }
@@ -72,7 +74,7 @@ class Player {
     for (const t of this.tickets()) t.rows.forEach((r, ri) => o.push({ key: t.color + t.n + ':' + ri, color: t.color, n: t.n, row: ri + 1, nums: r.filter((x) => x > 0) }));
     return o;
   }
-  resetRound() { this.waited.clear(); this.kinhRows.clear(); this.doi = false; this.kinh = false; }
+  resetRound() { this.waited.clear(); this.kinhRows.clear(); this.hoRows.clear(); this.doi = false; this.kinh = false; }
 }
 
 class Room {
@@ -220,6 +222,13 @@ class Room {
     if (Date.now() - p.lastChat < CHAT_COOLDOWN_MS) return { error: 'Bạn nhắn nhanh quá. Chờ một chút.' };
     p.lastChat = Date.now();
     return { events: [{ chat: this.say(p, text, false) }] };
+  }
+  // Hò: có một hàng đủ 3 số cái đã hô. Mỗi hàng hò được một lần mỗi ván, không lộ số.
+  ho(p) {
+    const R = p.rows().find((x) => !p.hoRows.has(x.key) && x.nums.filter((n) => this.calledSet.has(n)).length >= HO_AT);
+    if (!R) return { error: p.hoRows.size ? 'Các hàng đủ 3 số bạn đã hò rồi. Chờ hàng khác đủ 3 số.' : 'Chưa có hàng nào đủ 3 số cái đã hô.' };
+    p.hoRows.add(R.key);
+    return { events: [{ chat: this.say(p, 'Hò!', false) }, { event: { type: 'ho', name: p.name, id: p.id } }] };
   }
   setVoice(p, v) {
     p.voice = { in: !!(v && v.in), muted: !!(v && v.muted) };
